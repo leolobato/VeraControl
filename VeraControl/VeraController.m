@@ -18,6 +18,8 @@
 #import "VeraRoom.h"
 #import "VeraScene.h"
 
+#import <CommonCrypto/CommonDigest.h>
+
 //This is the default forward server
 #define FORWARD_SERVER_DEFAULT @"fwd5.mios.com"
 
@@ -87,6 +89,7 @@
         
         NSDictionary *miosLocatorResponse = [NSJSONSerialization JSONObjectWithData:data options:NSJSONReadingAllowFragments error:nil];
         NSArray *units = miosLocatorResponse[@"units"];
+        // TODO: notify callback if no units are returned
         if (units.count > 0){
             NSMutableArray *veraDevices = [[NSMutableArray alloc] init];
             for (NSDictionary *unitDictionary in units){
@@ -139,23 +142,58 @@
 }
 
 -(NSString *)controlUrl{
-    if (self.miosHostname.length == 0)
-        self.miosHostname = FORWARD_SERVER_DEFAULT;
-    
-    if (self.useMiosRemoteService || self.ipAddress.length == 0){
-        if ([self.veraSerialNumber length] == 0)
-            return [NSString stringWithFormat:@"https://%@/%@/%@", self.miosHostname, self.miosUsername, self.miosPassword];
-        return [NSString stringWithFormat:@"https://%@/%@/%@/%@", self.miosHostname, self.miosUsername, self.miosPassword, self.veraSerialNumber];
-    }
-    else{
-        return [NSString stringWithFormat:@"http://%@:3480", self.ipAddress];
+    if ([self isUI6]) {
+        if (self.useMiosRemoteService) {
+            return [NSString stringWithFormat:@"https://%@/relay/relay/relay/device/%@/port_3480", self.relayServer, self.veraSerialNumber];
+        } else {
+            // TODO: local access for UI6
+            return nil;
+        }
+        
+    } else {
+        if (self.miosHostname.length == 0)
+            self.miosHostname = FORWARD_SERVER_DEFAULT;
+        
+        if (self.useMiosRemoteService || self.ipAddress.length == 0){
+            if ([self.veraSerialNumber length] == 0)
+                return [NSString stringWithFormat:@"https://%@/%@/%@", self.miosHostname, self.miosUsername, self.miosPassword];
+            return [NSString stringWithFormat:@"https://%@/%@/%@/%@", self.miosHostname, self.miosUsername, self.miosPassword, self.veraSerialNumber];
+        }
+        else{
+            return [NSString stringWithFormat:@"http://%@:3480", self.ipAddress];
+        }
     }
 }
 
 -(void)performCommand:(NSString*)command completion:(void(^)(NSURLResponse *response, NSData *data, NSError *devices))callback{
-    [NSURLConnection sendAsynchronousRequest:[NSURLRequest requestWithURL:[NSURL URLWithString:[NSString stringWithFormat:@"%@/data_request?%@",[self controlUrl], command]]] queue:[[NSOperationQueue alloc] init] completionHandler:^(NSURLResponse *response, NSData *data, NSError *error){
-        callback(response, data, error);
-    }];
+    NSString *urlString = [NSString stringWithFormat:@"%@/data_request?%@",[self controlUrl], command];
+    NSMutableURLRequest *request = [NSMutableURLRequest requestWithURL:[NSURL URLWithString:urlString]];
+    BOOL execute = YES;
+    if ([self isUI6]) {
+        if (self.sessionToken) {
+            [request addValue:self.sessionToken forHTTPHeaderField:@"MMSSession"];
+        } else {
+            [VeraController requestSessionTokenForServer:self.relayServer
+                               withAuthenticatorResponse:self.miosAuthenticatorResponse
+                                       completionHandler:^(NSString *sessionToken, NSError *sessionError) {
+                                           if (sessionToken) {
+                                               self.sessionToken = sessionToken;
+                                               [self performCommand:command completion:callback];
+                                           } else {
+                                               if (callback) {
+                                                   callback(nil, nil, sessionError);
+                                               }
+                                           }
+                                       }];
+            execute = NO;
+        }
+    }
+    
+    if (execute) {
+        [NSURLConnection sendAsynchronousRequest:request queue:[[NSOperationQueue alloc] init] completionHandler:^(NSURLResponse *response, NSData *data, NSError *error){
+            callback(response, data, error);
+        }];
+    }
 }
 
 -(void)refreshDevices{
@@ -359,6 +397,180 @@
 
 
 
+#pragma mark - UI6
+
+-(BOOL)isUI6;
+{
+    return (self.relayServer.length>0);
+}
+
++ (NSString *)sha1For:(NSString *)string;
+{
+    NSData *data = [string dataUsingEncoding:NSUTF8StringEncoding];
+    uint8_t digest[CC_SHA1_DIGEST_LENGTH];
+    
+    CC_SHA1(data.bytes, data.length, digest);
+    
+    NSMutableString *output = [NSMutableString stringWithCapacity:CC_SHA1_DIGEST_LENGTH * 2];
+    
+    for (int i = 0; i < CC_SHA1_DIGEST_LENGTH; i++) {
+        [output appendFormat:@"%02x", digest[i]];
+    }
+    
+    return output;
+}
+
++(void)requestSessionTokenForServer:(NSString *)server withAuthenticatorResponse:(NSDictionary *)miosAuthenticatorResponse completionHandler:(void (^)(NSString *sessionToken, NSError *error))handler;
+{
+    NSString *authToken = miosAuthenticatorResponse[@"Identity"];
+    NSString *authSigToken = miosAuthenticatorResponse[@"IdentitySignature"];
+    
+    NSString *urlString = [NSString stringWithFormat:@"https://%@/info/session/token", server];
+    NSMutableURLRequest *request = [NSMutableURLRequest requestWithURL:[NSURL URLWithString:urlString]];
+    [request addValue:authToken forHTTPHeaderField:@"MMSAuth"];
+    [request addValue:authSigToken forHTTPHeaderField:@"MMSAuthSig"];
+
+    [NSURLConnection sendAsynchronousRequest:request queue:[[NSOperationQueue alloc] init] completionHandler:^(NSURLResponse *response, NSData *data, NSError *connectionError) {
+        
+        NSHTTPURLResponse *httpResponse = [response isKindOfClass:[NSHTTPURLResponse class]] ? (NSHTTPURLResponse *)response : nil;
+        NSInteger statusCode = httpResponse.statusCode;
+        if (statusCode>=200 && statusCode<300) {
+            
+            NSString *sessionToken = [[NSString alloc ] initWithData:data encoding:NSUTF8StringEncoding];
+            if (handler) {
+                handler(sessionToken, nil);
+            }
+        } else {
+            if (handler) {
+                NSError *error = [NSError errorWithDomain:[NSString stringWithFormat:@"VeraControl - Could not get Session Token for server %@", server] code:50 userInfo:nil];
+                handler(nil, error);
+            }
+        }
+    }];
+}
+
++(void)authenticateWithUsername:(NSString *)miosUsername password:(NSString *)miosPassword completionHandler:(void (^)(NSDictionary *miosAuthenticatorResponse, NSError *error))handler;
+{
+    NSString *miosLowercaseUsername = [miosUsername lowercaseString];
+    NSString *passwordSeed = @"oZ7QE6LcLJp6fiWzdqZc";
+    NSString *sha1String = [NSString stringWithFormat:@"%@%@%@", miosLowercaseUsername, miosPassword, passwordSeed];
+    NSString *passwordSHA1 = [self sha1For:sha1String];
+    
+    NSString *stringURL = [NSString stringWithFormat:@"https://us-autha11.mios.com/autha/auth/username/%@?SHA1Password=%@&PK_Oem=1", miosLowercaseUsername, passwordSHA1];
+    NSURL *url = [NSURL URLWithString:stringURL];
+    NSURLRequest *request = [NSURLRequest requestWithURL:url];
+    
+    [NSURLConnection sendAsynchronousRequest:request queue:[[NSOperationQueue alloc] init] completionHandler:^(NSURLResponse *response, NSData *data, NSError *connectionError) {
+        NSHTTPURLResponse *httpResponse = (NSHTTPURLResponse *)response;
+        NSInteger statusCode = httpResponse.statusCode;
+        if (statusCode>=200 && statusCode<300) {
+            NSDictionary *miosAuthenticatorResponse = [NSJSONSerialization JSONObjectWithData:data options:NSJSONReadingAllowFragments error:nil];
+            if (handler) {
+                handler(miosAuthenticatorResponse, nil);
+            }
+        } else {
+            if (handler) {
+                handler(nil, connectionError);
+            }
+        }
+    }];
+    
+}
+
++(void)findUI6VeraControllers:(NSString*)miosUsername password:(NSString*)miosPassword completion:(void(^)(NSArray *units, NSError *error))completionBlock;
+{
+    // Based on:
+    // http://forum.micasaverde.com/index.php/topic,24942.0.html
+    
+    
+    [self authenticateWithUsername:miosUsername password:miosPassword completionHandler:^(NSDictionary *miosAuthenticatorResponse, NSError *error) {
+        
+        if (miosAuthenticatorResponse) {
+            NSString *authToken = miosAuthenticatorResponse[@"Identity"];
+            NSData *decodedAuthTokenData = [[NSData alloc] initWithBase64EncodedString:authToken options:0];
+            NSDictionary *authTokenJSON = [NSJSONSerialization JSONObjectWithData:decodedAuthTokenData options:NSJSONReadingAllowFragments error:nil];
+            NSString *pkAccount = authTokenJSON[@"PK_Account"];
+            NSString *serverAccount = miosAuthenticatorResponse[@"Server_Account"];
+            
+            [self requestSessionTokenForServer:@"us-authd11.mios.com" withAuthenticatorResponse:miosAuthenticatorResponse completionHandler:^(NSString *sessionToken, NSError *error) {
+                
+                if (sessionToken) {
+                    NSString *urlString = [NSString stringWithFormat:@"https://%@/account/account/account/%@/devices",
+                                           serverAccount, pkAccount];
+                    NSURL *url = [NSURL URLWithString:urlString];
+                    NSMutableURLRequest *request = [NSMutableURLRequest requestWithURL:url];
+                    [request addValue:sessionToken forHTTPHeaderField:@"MMSSession"];
+                    [NSURLConnection sendAsynchronousRequest:request queue:[[NSOperationQueue alloc] init] completionHandler:^(NSURLResponse *response, NSData *data, NSError *connectionError) {
+                        
+                        NSHTTPURLResponse *httpResponse = (NSHTTPURLResponse *)response;
+                        NSInteger statusCode = httpResponse.statusCode;
+                        if (statusCode>=200 && statusCode<300) {
+                            
+                            NSDictionary *devicesResponse = [NSJSONSerialization JSONObjectWithData:data options:NSJSONReadingAllowFragments error:nil];
+                            NSMutableArray *veraDevices = [[NSMutableArray alloc] init];
+                            NSArray *units = devicesResponse[@"Devices"];
+                            for (int i=0; i<units.count; i++) {
+                                NSDictionary *unitDictionary = units[i];
+                                NSString *pkDevice = unitDictionary[@"PK_Device"];
+                                NSString *serverDevice = unitDictionary[@"Server_Device"];
+                                NSString *urlString = [NSString stringWithFormat:@"https://%@/device/device/device/%@", serverDevice, pkDevice];
+                                NSURL *url = [NSURL URLWithString:urlString];
+                                NSMutableURLRequest *request = [NSMutableURLRequest requestWithURL:url];
+                                [request addValue:sessionToken forHTTPHeaderField:@"MMSSession"];
+                                [NSURLConnection sendAsynchronousRequest:request queue:[[NSOperationQueue alloc] init] completionHandler:^(NSURLResponse *response, NSData *data, NSError *connectionError) {
+                                    
+                                    NSHTTPURLResponse *httpResponse = (NSHTTPURLResponse *)response;
+                                    NSInteger statusCode = httpResponse.statusCode;
+                                    if (statusCode>=200 && statusCode<300) {
+                                        
+                                        NSDictionary *unitResponse = [NSJSONSerialization JSONObjectWithData:data options:NSJSONReadingAllowFragments error:nil];
+                                        
+                                        VeraController *veraController = [[VeraController alloc] init];
+                                        veraController.veraSerialNumber = pkDevice;
+                                        veraController.ipAddress = unitResponse[@"InternalIP"];
+                                        veraController.relayServer = unitResponse[@"Server_Relay"];
+                                        veraController.miosAuthenticatorResponse = miosAuthenticatorResponse;
+                                        veraController.useMiosRemoteService = YES;
+                                        [veraDevices addObject:veraController];
+                                    }
+                                    
+                                    if (i==units.count-1) {
+                                        // Done. Notify callback.
+                                        if (completionBlock) {
+                                            completionBlock(veraDevices, nil);
+                                        }
+                                    }
+                                }];
+                            }
+                            
+                        } else {
+                            NSError *error = [NSError errorWithDomain:@"VeraControl - Could not get list of controllers" code:50 userInfo:nil];
+                            if (completionBlock) {
+                                completionBlock(nil, error);
+                            }
+                        }
+                    }];
+                    
+                } else {
+                    NSError *error = [NSError errorWithDomain:@"VeraControl - Could not get Session Token" code:50 userInfo:nil];
+                    if (completionBlock) {
+                        completionBlock(nil, error);
+                    }
+                }
+                
+            }];
+            
+            
+            
+        } else {
+            error = [NSError errorWithDomain:@"VeraControl - Could not locate Vera Controller" code:50 userInfo:nil];
+            if (completionBlock) {
+                completionBlock(nil, error);
+            }
+        }
+        
+    }];
+}
 
 
 

@@ -50,9 +50,13 @@
 @property (nonatomic, strong) NSString *veraSerialNumber;
 @property (nonatomic, assign) BOOL useMiosRemoteService;
 @property (nonatomic, strong) NSString *miosHostname;
+@property (nonatomic, strong) NSString *relayServer; // UI6+
+@property (nonatomic, strong) NSString *sessionToken; // UI6+
+@property (nonatomic, strong) NSDictionary *miosAuthenticatorResponse; // UI6+
 
 //Discovery
 +(void)findVeraControllers:(NSString*)miosUsername password:(NSString*)miosPassword completion:(void(^)(NSArray *units, NSError *error))completionBlock;
++(void)findUI6VeraControllers:(NSString*)miosUsername password:(NSString*)miosPassword completion:(void(^)(NSArray *units, NSError *error))completionBlock;
 
 //Reachability
 -(void)testReachability:(void(^)(BOOL reachable))completion;
