@@ -456,7 +456,7 @@
     NSString *sha1String = [NSString stringWithFormat:@"%@%@%@", miosLowercaseUsername, miosPassword, passwordSeed];
     NSString *passwordSHA1 = [self sha1For:sha1String];
     
-    NSString *stringURL = [NSString stringWithFormat:@"https://us-autha11.mios.com/autha/auth/username/%@?SHA1Password=%@&PK_Oem=1", miosLowercaseUsername, passwordSHA1];
+    NSString *stringURL = [NSString stringWithFormat:@"https://vera-us-oem-autha12.mios.com/autha/auth/username/%@?SHA1Password=%@&PK_Oem=1", miosLowercaseUsername, passwordSHA1];
     NSURL *url = [NSURL URLWithString:stringURL];
     NSURLRequest *request = [NSURLRequest requestWithURL:url];
     
@@ -492,7 +492,7 @@
             NSString *pkAccount = authTokenJSON[@"PK_Account"];
             NSString *serverAccount = miosAuthenticatorResponse[@"Server_Account"];
             
-            [self requestSessionTokenForServer:@"us-authd11.mios.com" withAuthenticatorResponse:miosAuthenticatorResponse completionHandler:^(NSString *sessionToken, NSError *error) {
+            [self requestSessionTokenForServer:@"vera-us-oem-authd12.mios.com" withAuthenticatorResponse:miosAuthenticatorResponse completionHandler:^(NSString *sessionToken, NSError *error) {
                 
                 if (sessionToken) {
                     NSString *urlString = [NSString stringWithFormat:@"https://%@/account/account/account/%@/devices",
