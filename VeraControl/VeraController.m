@@ -201,6 +201,10 @@
         NSHTTPURLResponse *r = (NSHTTPURLResponse*)response;
         
         if (r.statusCode !=200){
+            
+            NSLog(@"%li: %@", (long)r.statusCode, error);
+            NSLog(@"%@", [[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding]);
+            
             if (!self.useMiosRemoteService){
                 self.useMiosRemoteService = YES;
                 [self refreshDevices];
@@ -492,9 +496,11 @@
             NSString *pkAccount = authTokenJSON[@"PK_Account"];
             NSString *serverAccount = miosAuthenticatorResponse[@"Server_Account"];
             
+            NSLog(@"Authenticated. Will request session token...");
             [self requestSessionTokenForServer:@"vera-us-oem-authd12.mios.com" withAuthenticatorResponse:miosAuthenticatorResponse completionHandler:^(NSString *sessionToken, NSError *error) {
                 
                 if (sessionToken) {
+                    NSLog(@"Got session token. Will request devices...");
                     NSString *urlString = [NSString stringWithFormat:@"https://%@/account/account/account/%@/devices",
                                            serverAccount, pkAccount];
                     NSURL *url = [NSURL URLWithString:urlString];
@@ -505,7 +511,7 @@
                         NSHTTPURLResponse *httpResponse = (NSHTTPURLResponse *)response;
                         NSInteger statusCode = httpResponse.statusCode;
                         if (statusCode>=200 && statusCode<300) {
-                            
+                            NSLog(@"Got device list.");
                             NSDictionary *devicesResponse = [NSJSONSerialization JSONObjectWithData:data options:NSJSONReadingAllowFragments error:nil];
                             NSMutableArray *veraDevices = [[NSMutableArray alloc] init];
                             NSArray *units = devicesResponse[@"Devices"];
@@ -544,6 +550,8 @@
                             }
                             
                         } else {
+                            NSString *responseString = [[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding];
+                            CCLog(@"%@", responseString);
                             NSError *error = [NSError errorWithDomain:@"VeraControl - Could not get list of controllers" code:50 userInfo:nil];
                             if (completionBlock) {
                                 completionBlock(nil, error);
@@ -572,6 +580,47 @@
     }];
 }
 
+//  Keyed Archiving
+//
+- (void)encodeWithCoder:(NSCoder *)encoder
+{
+    [encoder encodeObject:self.ipAddress forKey:@"ipAddress"];
+    [encoder encodeObject:self.veraSerialNumber forKey:@"veraSerialNumber"];
+    [encoder encodeBool:self.useMiosRemoteService forKey:@"useMiosRemoteService"];
+    [encoder encodeObject:self.miosHostname forKey:@"miosHostname"];
+    [encoder encodeObject:self.relayServer forKey:@"relayServer"];
+    [encoder encodeObject:self.sessionToken forKey:@"sessionToken"];
+    [encoder encodeObject:self.miosAuthenticatorResponse forKey:@"miosAuthenticatorResponse"];
+}
 
+- (id)initWithCoder:(NSCoder *)decoder
+{
+    self = [super init];
+    if (self) {
+        self.ipAddress = [decoder decodeObjectForKey:@"ipAddress"];
+        self.veraSerialNumber = [decoder decodeObjectForKey:@"veraSerialNumber"];
+        self.useMiosRemoteService = [decoder decodeBoolForKey:@"useMiosRemoteService"];
+        self.miosHostname = [decoder decodeObjectForKey:@"miosHostname"];
+        self.relayServer = [decoder decodeObjectForKey:@"relayServer"];
+        self.sessionToken = [decoder decodeObjectForKey:@"sessionToken"];
+        self.miosAuthenticatorResponse = [decoder decodeObjectForKey:@"miosAuthenticatorResponse"];
+    }
+    return self;
+}
+
+- (id)copyWithZone:(NSZone *)zone
+{
+    id theCopy = [[[self class] allocWithZone:zone] init];  // use designated initializer
+    
+    [theCopy setIpAddress:[self.ipAddress copy]];
+    [theCopy setVeraSerialNumber:[self.veraSerialNumber copy]];
+    [theCopy setUseMiosRemoteService:self.useMiosRemoteService];
+    [theCopy setMiosHostname:[self.miosHostname copy]];
+    [theCopy setRelayServer:[self.relayServer copy]];
+    [theCopy setSessionToken:[self.sessionToken copy]];
+    [theCopy setMiosAuthenticatorResponse:[self.miosAuthenticatorResponse copy]];
+    
+    return theCopy;
+}
 
 @end

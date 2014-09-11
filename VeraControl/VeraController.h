@@ -24,7 +24,7 @@
 @protocol VeraControllerDelegate <NSObject>
 @end
 
-@interface VeraController : NSObject
+@interface VeraController : NSObject <NSCoding, NSCopying>
 
 //Must be defined for remote access or auto Vera discovery
 @property (nonatomic, strong) NSString *miosUsername;
